@@ -1,0 +1,15 @@
+from sqlalchemy import String, Integer
+from sqlalchemy.orm import Mapped, mapped_column
+from app.models.base import Base
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    nombre: Mapped[str] = mapped_column(String(120), nullable=False)
+    apellido: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    cedula: Mapped[str] = mapped_column(String(10), unique=True, nullable=False, index=True)
+    telefono: Mapped[str] = mapped_column(String(10), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="cliente")
