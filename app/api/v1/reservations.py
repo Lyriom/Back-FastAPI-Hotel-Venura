@@ -1,26 +1,71 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_current_user, require_admin
+from app.core.security import get_current_user, require_admin, decode_token
 from app.models.user import User
 from app.models.reservation import Reservation
 from app.models.room import Room
 from app.models.room_type import RoomType
-from app.schemas.reservation import ReservationCreateIn, ReservationAdminCreateIn, ReservationUpdateIn, ReservationOut
+from app.schemas.reservation import (
+    ReservationCreateIn,
+    ReservationAdminCreateIn,
+    ReservationUpdateIn,
+    ReservationOut,
+)
 from app.services.reservations_service import create_pending_reservation, update_reservation_admin
 from app.services.pdf_generator import generate_reservation_pdf
 
 router = APIRouter()
 
 
+def get_current_user_client(request: Request, db: Session = Depends(get_db)) -> User:
+    """
+    Para endpoints de cliente: acepta token por
+    - Header: Authorization: Bearer <token>
+    - Cookie: access_token=<token> (o "Bearer <token>")
+    """
+    token = None
+
+    # 1) Authorization header
+    auth = request.headers.get("Authorization")
+    if auth and auth.lower().startswith("bearer "):
+        token = auth.split(" ", 1)[1].strip()
+
+    # 2) Cookie fallback (si tu frontend usa credentials: "include")
+    if not token:
+        cookie_token = request.cookies.get("access_token") or request.cookies.get("token")
+        if cookie_token:
+            if cookie_token.lower().startswith("bearer "):
+                cookie_token = cookie_token.split(" ", 1)[1].strip()
+            token = cookie_token.strip()
+
+    if not token:
+        raise HTTPException(status_code=401, detail="No autorizado: falta token")
+
+    payload = decode_token(token)
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(status_code=401, detail="Token sin subject")
+
+    user = db.query(User).filter(User.email == sub).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Usuario no existe")
+
+    return user
+
+
 @router.post("", response_model=ReservationOut, status_code=201)
-def create_reservation(payload: ReservationCreateIn, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+def create_reservation(
+    payload: ReservationCreateIn,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user_client),  
+):
     try:
         res = create_pending_reservation(
             db,
@@ -35,7 +80,11 @@ def create_reservation(payload: ReservationCreateIn, db: Session = Depends(get_d
 
 
 @router.post("/admin", response_model=ReservationOut, status_code=201)
-def admin_create_reservation(payload: ReservationAdminCreateIn, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+def admin_create_reservation(
+    payload: ReservationAdminCreateIn,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
     # Validar que el usuario exista
     if not db.get(User, payload.user_id):
         raise HTTPException(status_code=400, detail="Usuario no existe")
@@ -53,13 +102,20 @@ def admin_create_reservation(payload: ReservationAdminCreateIn, db: Session = De
 
 
 @router.get("/me", response_model=list[ReservationOut])
-def my_reservations(db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+def my_reservations(
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user_client),  # 👈 CAMBIO
+):
     stmt = select(Reservation).where(Reservation.user_id == current.id).order_by(Reservation.id.desc())
     return db.execute(stmt).scalars().all()
 
 
 @router.get("/{reservation_id}", response_model=ReservationOut)
-def get_reservation(reservation_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+def get_reservation(
+    reservation_id: int,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user_client),  # 👈 CAMBIO
+):
     r = db.get(Reservation, reservation_id)
     if not r:
         raise HTTPException(status_code=404, detail="Reserva no encontrada")
@@ -75,7 +131,12 @@ def list_all(db: Session = Depends(get_db), _admin: User = Depends(require_admin
 
 
 @router.put("/{reservation_id}", response_model=ReservationOut)
-def update_reservation(reservation_id: int, payload: ReservationUpdateIn, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+def update_reservation(
+    reservation_id: int,
+    payload: ReservationUpdateIn,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
     r = db.get(Reservation, reservation_id)
     if not r:
         raise HTTPException(status_code=404, detail="Reserva no encontrada")
@@ -111,7 +172,11 @@ def delete_reservation(reservation_id: int, db: Session = Depends(get_db), _admi
 
 
 @router.get("/{reservation_id}/report")
-def reservation_report(reservation_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+def reservation_report(
+    reservation_id: int,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user_client),  # 👈 CAMBIO
+):
     r = db.get(Reservation, reservation_id)
     if not r:
         raise HTTPException(status_code=404, detail="Reserva no encontrada")
