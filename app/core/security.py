@@ -18,16 +18,34 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 ALGORITHM = "HS256"
 
+
+def _assert_bcrypt_password_len(password: str) -> None:
+    """bcrypt solo procesa los primeros 72 bytes.
+
+    Passlib (bcrypt) lanza ValueError si se excede para evitar truncación silenciosa.
+    Preferimos devolver un error claro (y 422/400) antes que un 500.
+    """
+    if len(password.encode("utf-8")) > 72:
+        raise ValueError(
+            "La contraseña no puede exceder 72 bytes (límite de bcrypt). "
+            "Usa una contraseña más corta."
+        )
+
+
 def hash_password(password: str) -> str:
+    _assert_bcrypt_password_len(password)
     return pwd_context.hash(password)
+
 
 def verify_password(password: str, password_hash: str) -> bool:
     return pwd_context.verify(password, password_hash)
+
 
 def create_access_token(*, sub: str, role: str, expires_minutes: int) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
     payload = {"sub": sub, "role": role, "exp": expire}
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
+
 
 def decode_token(token: str) -> dict:
     try:
@@ -39,6 +57,7 @@ def decode_token(token: str) -> dict:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+
 def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)) -> User:
     payload = decode_token(token)
     sub = payload.get("sub")
@@ -48,6 +67,7 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
     if not user:
         raise HTTPException(status_code=401, detail="Usuario no existe")
     return user
+
 
 def require_admin(current: User = Depends(get_current_user)) -> User:
     if current.role != "admin":

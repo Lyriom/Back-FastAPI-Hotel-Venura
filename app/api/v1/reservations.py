@@ -12,11 +12,12 @@ from app.models.user import User
 from app.models.reservation import Reservation
 from app.models.room import Room
 from app.models.room_type import RoomType
-from app.schemas.reservation import ReservationCreateIn, ReservationOut
-from app.services.reservations_service import create_pending_reservation
+from app.schemas.reservation import ReservationCreateIn, ReservationAdminCreateIn, ReservationUpdateIn, ReservationOut
+from app.services.reservations_service import create_pending_reservation, update_reservation_admin
 from app.services.pdf_generator import generate_reservation_pdf
 
 router = APIRouter()
+
 
 @router.post("", response_model=ReservationOut, status_code=201)
 def create_reservation(payload: ReservationCreateIn, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
@@ -32,15 +33,82 @@ def create_reservation(payload: ReservationCreateIn, db: Session = Depends(get_d
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+@router.post("/admin", response_model=ReservationOut, status_code=201)
+def admin_create_reservation(payload: ReservationAdminCreateIn, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+    # Validar que el usuario exista
+    if not db.get(User, payload.user_id):
+        raise HTTPException(status_code=400, detail="Usuario no existe")
+    try:
+        res = create_pending_reservation(
+            db,
+            user_id=payload.user_id,
+            room_id=payload.room_id,
+            start=payload.fecha_inicio,
+            end=payload.fecha_fin,
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/me", response_model=list[ReservationOut])
 def my_reservations(db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     stmt = select(Reservation).where(Reservation.user_id == current.id).order_by(Reservation.id.desc())
     return db.execute(stmt).scalars().all()
 
+
+@router.get("/{reservation_id}", response_model=ReservationOut)
+def get_reservation(reservation_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    r = db.get(Reservation, reservation_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Reserva no encontrada")
+    if current.role != "admin" and r.user_id != current.id:
+        raise HTTPException(status_code=403, detail="No tienes permiso")
+    return r
+
+
 @router.get("", response_model=list[ReservationOut])
 def list_all(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
     stmt = select(Reservation).order_by(Reservation.id.desc())
     return db.execute(stmt).scalars().all()
+
+
+@router.put("/{reservation_id}", response_model=ReservationOut)
+def update_reservation(reservation_id: int, payload: ReservationUpdateIn, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+    r = db.get(Reservation, reservation_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Reserva no encontrada")
+
+    # Validaciones puntuales
+    if payload.user_id is not None and not db.get(User, payload.user_id):
+        raise HTTPException(status_code=400, detail="Usuario no existe")
+    if payload.room_id is not None and not db.get(Room, payload.room_id):
+        raise HTTPException(status_code=400, detail="Habitación no existe")
+
+    try:
+        return update_reservation_admin(
+            db,
+            r,
+            user_id=payload.user_id,
+            room_id=payload.room_id,
+            start=payload.fecha_inicio,
+            end=payload.fecha_fin,
+            status=payload.status,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/{reservation_id}", status_code=204)
+def delete_reservation(reservation_id: int, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+    r = db.get(Reservation, reservation_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Reserva no encontrada")
+    db.delete(r)
+    db.commit()
+    return None
+
 
 @router.get("/{reservation_id}/report")
 def reservation_report(reservation_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):

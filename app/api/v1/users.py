@@ -9,9 +9,11 @@ from app.schemas.user import UserOut, UserCreateAdminIn, UserUpdateIn
 
 router = APIRouter()
 
+
 @router.get("", response_model=list[UserOut])
 def list_users(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
     return db.execute(select(User).order_by(User.id.asc())).scalars().all()
+
 
 @router.post("", response_model=UserOut, status_code=201)
 def create_user(payload: UserCreateAdminIn, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
@@ -20,19 +22,25 @@ def create_user(payload: UserCreateAdminIn, db: Session = Depends(get_db), _admi
     if db.execute(select(User.id).where(User.cedula == payload.cedula)).first():
         raise HTTPException(status_code=400, detail="Cédula ya existe")
 
+    try:
+        password_hash = hash_password(payload.password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     u = User(
         nombre=payload.nombre,
         apellido=payload.apellido,
         email=str(payload.email),
         cedula=payload.cedula,
         telefono=payload.telefono,
-        password_hash=hash_password(payload.password),
+        password_hash=password_hash,
         role=payload.role,
     )
     db.add(u)
     db.commit()
     db.refresh(u)
     return u
+
 
 @router.put("/{user_id}", response_model=UserOut)
 def update_user(user_id: int, payload: UserUpdateIn, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
@@ -60,11 +68,15 @@ def update_user(user_id: int, payload: UserUpdateIn, db: Session = Depends(get_d
     if payload.role is not None:
         u.role = payload.role
     if payload.password is not None:
-        u.password_hash = hash_password(payload.password)
+        try:
+            u.password_hash = hash_password(payload.password)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     db.commit()
     db.refresh(u)
     return u
+
 
 @router.delete("/{user_id}", status_code=204)
 def delete_user(user_id: int, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
