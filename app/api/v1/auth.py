@@ -14,23 +14,17 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 @router.post("/register", response_model=RegisterOut, status_code=201)
 def register(payload: RegisterIn, db: Session = Depends(get_db)):
-    """Registro público (cualquier persona).
-
-    Crea usuarios con rol fijo: cliente.
-    """
-    email = str(payload.email).strip().lower()
+    email = payload.email.lower().strip()
 
     if db.execute(select(User.id).where(User.email == email)).first():
         raise HTTPException(status_code=400, detail="Email ya existe")
+
     if db.execute(select(User.id).where(User.cedula == payload.cedula)).first():
         raise HTTPException(status_code=400, detail="Cédula ya existe")
 
-    try:
-        password_hash = hash_password(payload.password)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    password_hash = hash_password(payload.password)
 
-    u = User(
+    user = User(
         nombre=payload.nombre,
         apellido=payload.apellido,
         email=email,
@@ -39,23 +33,43 @@ def register(payload: RegisterIn, db: Session = Depends(get_db)):
         password_hash=password_hash,
         role="cliente",
     )
-    db.add(u)
-    db.commit()
-    db.refresh(u)
 
-    token = create_access_token(sub=u.email, role=u.role, expires_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return {"access_token": token, "token_type": "bearer", "user": u}
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(
+        sub=user.email,
+        role=user.role,
+        expires_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES,
+    )
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user,
+    }
 
 
 @router.post("/login")
-def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    # Swagger manda "username", nosotros lo tratamos como email
-    email = form.username.strip().lower()
+def login(
+    form: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    email = form.username.lower().strip()
     password = form.password
 
     user = db.query(User).filter(User.email == email).first()
     if not user or not verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
-    token = create_access_token(sub=user.email, role=user.role, expires_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return {"access_token": token, "token_type": "bearer"}
+    token = create_access_token(
+        sub=user.email,
+        role=user.role,
+        expires_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES,
+    )
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+    }
