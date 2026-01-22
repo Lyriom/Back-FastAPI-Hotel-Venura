@@ -13,7 +13,7 @@ app.add_middleware(
         "https://www.hotelventura.com.ec",
         "https://auth.hotelventura.com.ec",
     ],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
