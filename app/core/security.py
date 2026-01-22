@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -13,27 +12,19 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+pwd_context = CryptContext(
+    schemes=["pbkdf2_sha256", "bcrypt"],
+    deprecated=["bcrypt"],
+)
 
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 ALGORITHM = "HS256"
 
 
-def _assert_bcrypt_password_len(password: str) -> None:
-    """bcrypt solo procesa los primeros 72 bytes.
-
-    Passlib (bcrypt) lanza ValueError si se excede para evitar truncación silenciosa.
-    Preferimos devolver un error claro (y 422/400) antes que un 500.
-    """
-    if len(password.encode("utf-8")) > 72:
-        raise ValueError(
-            "La contraseña no puede exceder 72 bytes (límite de bcrypt). "
-            "Usa una contraseña más corta."
-        )
-
-
 def hash_password(password: str) -> str:
-    _assert_bcrypt_password_len(password)
+    # (opcional) límite de seguridad contra payloads absurdos
+    if len(password.encode("utf-8")) > 4096:
+        raise ValueError("La contraseña es demasiado larga.")
     return pwd_context.hash(password)
 
 

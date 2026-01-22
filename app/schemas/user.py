@@ -1,10 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, field_validator
-
-
-def _assert_bcrypt_password_len(password: str) -> str:
-    if len(password.encode("utf-8")) > 72:
-        raise ValueError("La contraseña no puede exceder 72 bytes (límite de bcrypt).")
-    return password
+from pydantic import BaseModel, EmailStr, Field
 
 
 class UserOut(BaseModel):
@@ -26,13 +20,8 @@ class UserCreateAdminIn(BaseModel):
     email: EmailStr
     cedula: str = Field(pattern=r"^\d{10}$")
     telefono: str = Field(pattern=r"^\d{10}$")
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=4096)
     role: str = Field(pattern=r"^(admin|cliente)$")
-
-    @field_validator("password")
-    @classmethod
-    def _password_len(cls, v: str) -> str:
-        return _assert_bcrypt_password_len(v)
 
 
 class UserUpdateIn(BaseModel):
@@ -42,11 +31,4 @@ class UserUpdateIn(BaseModel):
     cedula: str | None = Field(default=None, pattern=r"^\d{10}$")
     telefono: str | None = Field(default=None, pattern=r"^\d{10}$")
     role: str | None = Field(default=None, pattern=r"^(admin|cliente)$")
-    password: str | None = Field(default=None, min_length=8)
-
-    @field_validator("password")
-    @classmethod
-    def _password_len(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
-        return _assert_bcrypt_password_len(v)
+    password: str | None = Field(default=None, min_length=8, max_length=4096)
