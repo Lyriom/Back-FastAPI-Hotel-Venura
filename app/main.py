@@ -1,22 +1,26 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware # <--- 1. IMPORTAR
+from fastapi.middleware.cors import CORSMiddleware 
 
 app = FastAPI()
 
-# 2. DEFINIR ORÍGENES PERMITIDOS
 origins = [
-    "http://localhost:5173",      # Tu frontend local (Vite)
-    "http://127.0.0.1:5173",      # Alternativa local
-    "http://localhost:5174",      # Tu frontend local (Vite)
-    "http://127.0.0.1:5174",      # Alternativa local
+    # 1. Desarrollo Local
+    "http://localhost:5173",  
+    "http://localhost:5174",  
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+
+    # 2. Producción 
+    "https://hotelventura.com.ec",       
+    "https://www.hotelventura.com.ec",   
+    "https://auth.hotelventura.com.ec",  
 ]
 
-# 3. AGREGAR EL MIDDLEWARE
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,        # Lista de orígenes permitidos
+    allow_origins=origins,        
     allow_credentials=True,
-    allow_methods=["*"],          # Permitir todos los métodos (GET, POST, DELETE, etc.)
+    allow_methods=["*"],         
 
 app.include_router(api_router, prefix="/api/v1")
 
