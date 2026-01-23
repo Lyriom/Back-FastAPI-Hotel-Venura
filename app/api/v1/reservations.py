@@ -1,13 +1,14 @@
 from pathlib import Path
+from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_current_user, require_admin, decode_token
+from app.core.security import get_current_user, require_admin
 from app.models.user import User
 from app.models.reservation import Reservation
 from app.models.room import Room
@@ -24,47 +25,70 @@ from app.services.pdf_generator import generate_reservation_pdf
 router = APIRouter()
 
 
-def get_current_user_client(request: Request, db: Session = Depends(get_db)) -> User:
+# ✅ NUEVO: reservas bloqueantes para mapa (sin datos privados)
+@router.get("/blocked")
+def blocked_reservations(
+    start: str | None = Query(default=None, description="YYYY-MM-DD"),
+    end: str | None = Query(default=None, description="YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+    _current: User = Depends(get_current_user),  # cliente o admin logueado
+):
     """
-    Para endpoints de cliente: acepta token por
-    - Header: Authorization: Bearer <token>
-    - Cookie: access_token=<token> (o "Bearer <token>")
+    Devuelve SOLO lo necesario para disponibilidad del hotel:
+      - room_id
+      - fecha_inicio
+      - fecha_fin
+      - status
+    Solo considera reservas: pending, paid
     """
-    token = None
+    stmt = (
+        select(Reservation.room_id, Reservation.fecha_inicio, Reservation.fecha_fin, Reservation.status)
+        .where(Reservation.status.in_(["pending", "paid"]))
+    )
 
-    # 1) Authorization header
-    auth = request.headers.get("Authorization")
-    if auth and auth.lower().startswith("bearer "):
-        token = auth.split(" ", 1)[1].strip()
+    rows = db.execute(stmt).all()
 
-    # 2) Cookie fallback (si tu frontend usa credentials: "include")
-    if not token:
-        cookie_token = request.cookies.get("access_token") or request.cookies.get("token")
-        if cookie_token:
-            if cookie_token.lower().startswith("bearer "):
-                cookie_token = cookie_token.split(" ", 1)[1].strip()
-            token = cookie_token.strip()
+    # si no mandan fechas, devolvemos todo lo bloqueante
+    if not start or not end:
+        return [
+            {
+                "room_id": r.room_id,
+                "fecha_inicio": str(r.fecha_inicio),
+                "fecha_fin": str(r.fecha_fin),
+                "status": r.status,
+            }
+            for r in rows
+        ]
 
-    if not token:
-        raise HTTPException(status_code=401, detail="No autorizado: falta token")
+    # filtrado por overlap [start, end)
+    try:
+        s = date.fromisoformat(start)
+        e = date.fromisoformat(end)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Fechas inválidas. Usa YYYY-MM-DD")
 
-    payload = decode_token(token)
-    sub = payload.get("sub")
-    if not sub:
-        raise HTTPException(status_code=401, detail="Token sin subject")
+    def overlaps(a_start: date, a_end: date, b_start: date, b_end: date) -> bool:
+        return a_start < b_end and a_end > b_start
 
-    user = db.query(User).filter(User.email == sub).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Usuario no existe")
-
-    return user
+    out = []
+    for r in rows:
+        if overlaps(r.fecha_inicio, r.fecha_fin, s, e):
+            out.append(
+                {
+                    "room_id": r.room_id,
+                    "fecha_inicio": str(r.fecha_inicio),
+                    "fecha_fin": str(r.fecha_fin),
+                    "status": r.status,
+                }
+            )
+    return out
 
 
 @router.post("", response_model=ReservationOut, status_code=201)
 def create_reservation(
     payload: ReservationCreateIn,
     db: Session = Depends(get_db),
-    current: User = Depends(get_current_user_client),  
+    current: User = Depends(get_current_user),
 ):
     try:
         res = create_pending_reservation(
@@ -85,7 +109,6 @@ def admin_create_reservation(
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
-    # Validar que el usuario exista
     if not db.get(User, payload.user_id):
         raise HTTPException(status_code=400, detail="Usuario no existe")
     try:
@@ -102,32 +125,25 @@ def admin_create_reservation(
 
 
 @router.get("/me", response_model=list[ReservationOut])
-def my_reservations(
-    db: Session = Depends(get_db),
-    current: User = Depends(get_current_user_client),  # 👈 CAMBIO
-):
+def my_reservations(db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     stmt = select(Reservation).where(Reservation.user_id == current.id).order_by(Reservation.id.desc())
     return db.execute(stmt).scalars().all()
-
-
-@router.get("/{reservation_id}", response_model=ReservationOut)
-def get_reservation(
-    reservation_id: int,
-    db: Session = Depends(get_db),
-    current: User = Depends(get_current_user_client),  # 👈 CAMBIO
-):
-    r = db.get(Reservation, reservation_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Reserva no encontrada")
-    if current.role != "admin" and r.user_id != current.id:
-        raise HTTPException(status_code=403, detail="No tienes permiso")
-    return r
 
 
 @router.get("", response_model=list[ReservationOut])
 def list_all(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
     stmt = select(Reservation).order_by(Reservation.id.desc())
     return db.execute(stmt).scalars().all()
+
+
+@router.get("/{reservation_id}", response_model=ReservationOut)
+def get_reservation(reservation_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    r = db.get(Reservation, reservation_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Reserva no encontrada")
+    if current.role != "admin" and r.user_id != current.id:
+        raise HTTPException(status_code=403, detail="No tienes permiso")
+    return r
 
 
 @router.put("/{reservation_id}", response_model=ReservationOut)
@@ -141,7 +157,6 @@ def update_reservation(
     if not r:
         raise HTTPException(status_code=404, detail="Reserva no encontrada")
 
-    # Validaciones puntuales
     if payload.user_id is not None and not db.get(User, payload.user_id):
         raise HTTPException(status_code=400, detail="Usuario no existe")
     if payload.room_id is not None and not db.get(Room, payload.room_id):
@@ -172,16 +187,11 @@ def delete_reservation(reservation_id: int, db: Session = Depends(get_db), _admi
 
 
 @router.get("/{reservation_id}/report")
-def reservation_report(
-    reservation_id: int,
-    db: Session = Depends(get_db),
-    current: User = Depends(get_current_user_client),  # 👈 CAMBIO
-):
+def reservation_report(reservation_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     r = db.get(Reservation, reservation_id)
     if not r:
         raise HTTPException(status_code=404, detail="Reserva no encontrada")
 
-    # permisos: admin ve todo, cliente solo lo suyo
     if current.role != "admin" and r.user_id != current.id:
         raise HTTPException(status_code=403, detail="No tienes permiso")
 
@@ -206,7 +216,6 @@ def reservation_report(
         status=r.status,
     )
 
-    # guardar path en DB
     if r.reporte_path != rel:
         r.reporte_path = rel
         db.add(r)
